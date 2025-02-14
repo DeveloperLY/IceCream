@@ -15,6 +15,12 @@ struct ErrorHandler {
     
     static let shared = ErrorHandler()
     
+    struct Constant {
+        /// CloudKit says maximum number of items in a single request is 400.
+        /// So I think 300 should be fine by them.
+        static let chunkSize = 300
+    }
+    
     /// We could classify all the result that CKOperation returns into the following five CKOperationResultTypes
     enum CKOperationResultType {
         case success
@@ -194,7 +200,7 @@ struct ErrorHandler {
     
 }
 
-extension Array where Element: CKRecord {
+extension Array {
     /// Chunk the big group into smaller ones, with the given chunkSize
     /// For example, we have some dogs(You can test it in the playground):
     ///
