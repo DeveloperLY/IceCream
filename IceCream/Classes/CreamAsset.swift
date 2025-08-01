@@ -10,6 +10,9 @@ import RealmSwift
 import Realm
 import CloudKit
 
+let ASSET_EXTENSION = "asset_extension"
+let ASSET_SHOULD_OVERWRITE = "asset_shouldOvertwrite"
+
 /// If you want to store and sync big data automatically, then using CreamAsset might be a good choice.
 /// According to Apple https://developer.apple.com/documentation/cloudkit/ckasset :
 /// "You can also use assets in places where the data you want to assign to a field is more than a few kilobytes in size. "
@@ -19,25 +22,35 @@ import CloudKit
 /// So this is the deal.
 public class CreamAsset: Object {
     @Persisted private var uniqueFileName = ""
+    @Persisted var fileExtension: String? = nil
+    @Persisted var shouldOverwrite = true
+    
     override public static func ignoredProperties() -> [String] {
         return ["filePath"]
     }
-
-    private convenience init(objectID: String, propName: String) {
+    
+    private convenience init(objectID: String, propName: String, shouldOverwrite: Bool, fileExtension: String? = nil) {
         self.init()
-        self.uniqueFileName = "\(objectID)_\(propName)"
+        self.shouldOverwrite = shouldOverwrite
+        
+        if let ext = fileExtension {
+            self.fileExtension = ext
+            self.uniqueFileName = "\(objectID)_\(propName).\(ext)"
+        } else {
+            self.uniqueFileName = "\(objectID)_\(propName)"
+        }
     }
     
     /// Use this method to fetch the underlying data of the CreamAsset
     public func storedData() -> Data? {
         return try? Data(contentsOf: filePath)
     }
-
+    
     /// Where the asset locates in the file system
     public var filePath: URL {
         return CreamAsset.creamAssetDefaultURL().appendingPathComponent(uniqueFileName)
     }
-
+    
     /// Save the given data to local file system
     /// - Parameters:
     ///   - data: The data to save
@@ -48,7 +61,7 @@ public class CreamAsset: Object {
         guard shouldOverwrite || !FileManager.default.fileExists(atPath: url.path) else { return }
         try data.write(to: url)
     }
-
+    
     // MARK: - CKRecordConvertible & CKRecordRecoverable
     
     /// Wrap asset as CKAsset for uploading to CloudKit
@@ -57,9 +70,8 @@ public class CreamAsset: Object {
             return CKAsset(fileURL: filePath)
         }
     }
-
+    
     /// Parses a CKRecord and CKAsset back into a CreamAsset
-    ///
     /// - Parameters:
     ///   - propName: The unique property name to identify this asset. e.g.: Dog Object may have multiple CreamAsset properties, so we need unique `propName`s to identify these.
     ///   - record: The CKRecord where we will pull the record ID off of to locate/store the file
@@ -67,12 +79,15 @@ public class CreamAsset: Object {
     /// - Returns: A CreamAsset if it was successful
     static func parse(from propName: String, record: CKRecord, asset: CKAsset) -> CreamAsset? {
         guard let url = asset.fileURL else { return nil }
+        let fileExtension = record.value(forKey: ASSET_EXTENSION) as? String
+        let shouldOverwrite = record.value(forKey: ASSET_SHOULD_OVERWRITE) as? Bool
         return CreamAsset.create(objectID: record.recordID.recordName,
                                  propName: propName,
                                  url: url,
-                                 shouldOverwrite: true)
+                                 shouldOverwrite: shouldOverwrite ?? true,
+                                 fileExtension: fileExtension)
     }
-
+    
     // MARK: - Factory methods
     
     /// Creates a new CreamAsset for the given object id with Data
@@ -83,9 +98,11 @@ public class CreamAsset: Object {
     ///   - data: The file data
     ///   - shouldOverwrite: Whether to try and save the file even if an existing file exists for the same object ID.
     /// - Returns: A CreamAsset if it was successful
-    public static func create(objectID: String, propName: String, data: Data, shouldOverwrite: Bool = true) -> CreamAsset? {
+    public static func create(objectID: String, propName: String, data: Data, shouldOverwrite: Bool = true, fileExtension: String? = nil) -> CreamAsset? {
         let creamAsset = CreamAsset(objectID: objectID,
-                                    propName: propName)
+                                    propName: propName,
+                                    shouldOverwrite: shouldOverwrite,
+                                    fileExtension: fileExtension)
         do {
             try save(data: data, to: creamAsset.uniqueFileName, shouldOverwrite: shouldOverwrite)
             return creamAsset
@@ -103,13 +120,14 @@ public class CreamAsset: Object {
     ///   - data: The file data
     ///   - shouldOverwrite: Whether to try and save the file even if an existing file exists for the same object.
     /// - Returns: A CreamAsset if it was successful
-    public static func create(object: CKRecordConvertible, propName: String, data: Data, shouldOverwrite: Bool = true) -> CreamAsset? {
+    public static func create(object: CKRecordConvertible, propName: String, data: Data, shouldOverwrite: Bool = true, fileExtension: String? = nil) -> CreamAsset? {
         return create(objectID: object.recordID.recordName,
                       propName: propName,
                       data: data,
-                      shouldOverwrite: shouldOverwrite)
+                      shouldOverwrite: shouldOverwrite,
+                      fileExtension: fileExtension)
     }
-
+    
     /// Creates a new CreamAsset for the given object with a URL
     ///
     /// - Parameters:
@@ -117,14 +135,15 @@ public class CreamAsset: Object {
     ///   - propName: The unique property name to identify this asset. e.g.: Dog Object may have multiple CreamAsset properties, so we need unique `propName`s to identify these.
     ///   - url: The URL where the file located
     ///   - shouldOverwrite: Whether to try and save the file even if an existing file exists for the same object.
+    ///   - keepExtension: Whether the file extension should be preserved or not
     /// - Returns: A CreamAsset if it was successful
-    public static func create(object: CKRecordConvertible, propName: String, url: URL, shouldOverwrite: Bool = true) -> CreamAsset? {
+    public static func create(object: CKRecordConvertible, propName: String, url: URL, shouldOverwrite: Bool = true, keepExtension: Bool = false) -> CreamAsset? {
         return create(objectID: object.recordID.recordName,
                       propName: propName,
                       url: url,
-                      shouldOverwrite: shouldOverwrite)
+                      shouldOverwrite: shouldOverwrite,
+                      fileExtension: keepExtension ? url.pathExtension : nil)
     }
-    
     
     /// Creates a new CreamAsset for the given objectID with a URL where asset locates
     /// - Parameters:
@@ -132,9 +151,26 @@ public class CreamAsset: Object {
     ///   - propName: The unique property name to identify this asset. e.g.: Dog Object may have multiple CreamAsset properties, so we need unique `propName`s to identify these.
     ///   - url: The location where asset locates
     ///   - shouldOverwrite: Whether to try and save the file even if an existing file exists for the same object.
+    ///   - keepExtension: Whether the file extension should be preserved or not
     /// - Returns: The CreamAsset if creates successful
-    public static func create(objectID: String, propName: String, url: URL, shouldOverwrite: Bool = true) -> CreamAsset? {
-        let creamAsset = CreamAsset(objectID: objectID, propName: propName)
+    public static func create(objectID: String, propName: String, url: URL, shouldOverwrite: Bool = true, keepExtension: Bool = false) -> CreamAsset? {
+        return create(objectID: objectID,
+                      propName: propName,
+                      url: url,
+                      shouldOverwrite: shouldOverwrite,
+                      fileExtension: keepExtension ? url.pathExtension : nil)
+    }
+    
+    /// Creates a new CreamAsset for the given objectID with a URL where asset locates
+    /// - Parameters:
+    ///   - objectID: The key to identify the object. Normally it's the recordName property of CKRecord.ID when recovering from CloudKit
+    ///   - propName: The unique property name to identify this asset. e.g.: Dog Object may have multiple CreamAsset properties, so we need unique `propName`s to identify these.
+    ///   - url: The location where asset locates
+    ///   - shouldOverwrite: Whether to try and save the file even if an existing file exists for the same object.
+    ///   - fileExtension: File extension to append to the filename
+    /// - Returns: The CreamAsset if creates successful
+    public static func create(objectID: String, propName: String, url: URL, shouldOverwrite: Bool = true, fileExtension: String? = nil) -> CreamAsset? {
+        let creamAsset = CreamAsset(objectID: objectID, propName: propName, shouldOverwrite: shouldOverwrite, fileExtension: fileExtension)
         if shouldOverwrite {
             do {
                 try FileManager.default.removeItem(at: creamAsset.filePath)
@@ -169,7 +205,7 @@ extension CreamAsset {
         }
         return commonAssetPath
     }
-
+    
     /// Fetch all CreamAsset files' path
     public static func creamAssetFilesPaths() -> [String] {
         do {
@@ -179,7 +215,7 @@ extension CreamAsset {
         }
         return [String]()
     }
-
+    
     /// Execute deletions
     private static func excecuteDeletions(in filesNames: [String]) {
         for fileName in filesNames {
@@ -191,11 +227,11 @@ extension CreamAsset {
             }
         }
     }
-
+    
     /// When delete an object. We need to delete related CreamAsset files
     public static func deleteCreamAssetFile(with id: String) {
         let needToDeleteCacheFiles = creamAssetFilesPaths().filter { $0.contains(id) }
         excecuteDeletions(in: needToDeleteCacheFiles)
     }
-
+    
 }
